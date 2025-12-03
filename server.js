@@ -13,11 +13,7 @@ app.use(cors());
 app.use(express.json());
 
 // 🔹 Debug: check all important env vars
-console.log("MONGO_URI:", process.env.MONGO_URI);
-console.log("DATABASE_NAME:", process.env.DATABASE_NAME);
-console.log("GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID);
-console.log("GOOGLE_CLIENT_SECRET:", process.env.GOOGLE_CLIENT_SECRET);
-console.log("GOOGLE_REDIRECT_URI:", process.env.GOOGLE_REDIRECT_URI);
+
 console.log("FRONTEND_URL:", process.env.FRONTEND_URL);
 
 const PORT = process.env.PORT || 3000;

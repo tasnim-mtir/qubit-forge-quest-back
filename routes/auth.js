@@ -151,10 +151,11 @@ router.get("/google/callback", async (req, res) => {
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     return res.redirect(
-      `${process.env.FRONTEND_URL}/auth?token=${token}&user=${encodeURIComponent(
-        JSON.stringify({ id: user._id, email: user.email })
-      )}`
-    );
+  `${process.env.FRONTEND_URL}/auth?token=${token}&user=${encodeURIComponent(
+    JSON.stringify({ id: user._id, email: user.email })
+  )}`
+);
+
 
   } catch (err) {
     console.error("GOOGLE LOGIN ERROR:", err.response?.data || err);

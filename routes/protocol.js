@@ -6,17 +6,59 @@ import Stake from "../models/Stake.js";
 import ComputeVault from "../models/ComputeVault.js";
 import ComputeTask from "../models/ComputeTask.js";
 import Lease from "../models/Lease.js";
+import { getProcessorStats } from "../services/taskProcessor.js";
 
 const router = express.Router();
 
-const QX_TO_CC_RATIO = 100; // 1 QX = 100 CC
-const REWARD_RATE = 5; // 5% annual rewards
-const MIN_TASK_COST = 1; // Minimum CC per task
-const MAX_TASK_COST = 10000; // Maximum CC per task
-const DEFAULT_TASK_TIMEOUT = 3600; // seconds (1 hour)
-const MIN_LEASE_DURATION = 7; // days
-const MAX_LEASE_DURATION = 365; // days
-const LEASE_RENEWAL_INCENTIVE = 3; // 3% discount
+// ===========================
+// PROTOCOL PARAMETERS (Mutable)
+// ===========================
+let protocolParams = {
+  QX_TO_CC_RATIO: 100,
+  REWARD_RATE: 5,
+  MIN_TASK_COST: 1,
+  MAX_TASK_COST: 10000,
+  DEFAULT_TASK_TIMEOUT: 3600,
+  MIN_LEASE_DURATION: 7,
+  MAX_LEASE_DURATION: 365,
+  LEASE_RENEWAL_INCENTIVE: 3,
+  MIN_COMPUTE_AMOUNT: 10,
+  MAX_COMPUTE_AMOUNT: 10000
+};
+
+// Audit log for parameter changes
+let parameterAuditLog = [];
+
+// Helper function to add audit entry
+const addAuditEntry = (adminEmail, paramName, oldValue, newValue, reason) => {
+  parameterAuditLog.push({
+    timestamp: new Date(),
+    admin: adminEmail,
+    parameter: paramName,
+    oldValue,
+    newValue,
+    reason: reason || "No reason provided",
+    id: Date.now() + Math.random()
+  });
+  // Keep only last 100 entries
+  if (parameterAuditLog.length > 100) {
+    parameterAuditLog = parameterAuditLog.slice(-100);
+  }
+};
+
+// Destructure for backward compatibility
+const {
+  QX_TO_CC_RATIO,
+  REWARD_RATE,
+  MIN_TASK_COST,
+  MAX_TASK_COST,
+  DEFAULT_TASK_TIMEOUT,
+  MIN_LEASE_DURATION,
+  MAX_LEASE_DURATION,
+  LEASE_RENEWAL_INCENTIVE,
+  MIN_COMPUTE_AMOUNT,
+  MAX_COMPUTE_AMOUNT
+} = protocolParams;
 
 // ===========================
 // DASHBOARD OVERVIEW ENDPOINTS
@@ -143,7 +185,7 @@ router.get("/dashboard/admin-overview", authMiddleware, requireRole("admin"), as
         },
         poolMetrics: {
           rewardPool: vault.rewardPool,
-          ccPerQX: QX_TO_CC_RATIO
+          ccPerQX: protocolParams.QX_TO_CC_RATIO
         }
       }
     });
@@ -174,7 +216,7 @@ router.post("/stake", authMiddleware, async (req, res) => {
       return res.status(400).json({ message: "lockPeriod must be greater than 0 days" });
     }
 
-    const computeCreditsReceived = amountQX * QX_TO_CC_RATIO;
+    const computeCreditsReceived = amountQX * protocolParams.QX_TO_CC_RATIO;
 
     const stake = await Stake.create({
       userId: req.user.id,
@@ -411,12 +453,12 @@ router.post("/compute-task/create", authMiddleware, requireRole("creator"), asyn
       return res.status(400).json({ message: "taskName and computeCostCC are required" });
     }
 
-    if (computeCostCC < MIN_TASK_COST) {
-      return res.status(400).json({ message: `Minimum task cost is ${MIN_TASK_COST} CC` });
+    if (computeCostCC < protocolParams.MIN_TASK_COST) {
+      return res.status(400).json({ message: `Minimum task cost is ${protocolParams.MIN_TASK_COST} CC` });
     }
 
-    if (computeCostCC > MAX_TASK_COST) {
-      return res.status(400).json({ message: `Maximum task cost is ${MAX_TASK_COST} CC` });
+    if (computeCostCC > protocolParams.MAX_TASK_COST) {
+      return res.status(400).json({ message: `Maximum task cost is ${protocolParams.MAX_TASK_COST} CC` });
     }
 
     // Check CC balance
@@ -442,7 +484,7 @@ router.post("/compute-task/create", authMiddleware, requireRole("creator"), asyn
       taskName,
       taskDescription: taskDescription || "",
       computeCostCC,
-      estimatedDuration: estimatedDuration || DEFAULT_TASK_TIMEOUT,
+      estimatedDuration: estimatedDuration || protocolParams.DEFAULT_TASK_TIMEOUT,
       priority: priority || "Medium",
       taskType: taskType || "General",
       status: "queued"
@@ -657,12 +699,12 @@ router.post("/lease", authMiddleware, requireRole("investor"), async (req, res) 
       return res.status(400).json({ message: "All amounts must be greater than 0" });
     }
 
-    if (duration < MIN_LEASE_DURATION) {
-      return res.status(400).json({ message: `Minimum lease duration is ${MIN_LEASE_DURATION} days` });
+    if (duration < protocolParams.MIN_LEASE_DURATION) {
+      return res.status(400).json({ message: `Minimum lease duration is ${protocolParams.MIN_LEASE_DURATION} days` });
     }
 
-    if (duration > MAX_LEASE_DURATION) {
-      return res.status(400).json({ message: `Maximum lease duration is ${MAX_LEASE_DURATION} days` });
+    if (duration > protocolParams.MAX_LEASE_DURATION) {
+      return res.status(400).json({ message: `Maximum lease duration is ${protocolParams.MAX_LEASE_DURATION} days` });
     }
 
     const lease = await Lease.create({
@@ -800,13 +842,13 @@ router.put("/lease/:leaseId/extend", authMiddleware, async (req, res) => {
     }
 
     const newDuration = lease.duration + additionalDays;
-    if (newDuration > MAX_LEASE_DURATION) {
-      return res.status(400).json({ message: `Total duration cannot exceed ${MAX_LEASE_DURATION} days` });
+    if (newDuration > protocolParams.MAX_LEASE_DURATION) {
+      return res.status(400).json({ message: `Total duration cannot exceed ${protocolParams.MAX_LEASE_DURATION} days` });
     }
 
     // Calculate renewal discount
-    const renewalDiscount = (lease.costCC * LEASE_RENEWAL_INCENTIVE) / 100;
-    const additionalCost = (lease.costCC / lease.duration) * additionalDays * (1 - LEASE_RENEWAL_INCENTIVE / 100);
+    const renewalDiscount = (lease.costCC * protocolParams.LEASE_RENEWAL_INCENTIVE) / 100;
+    const additionalCost = (lease.costCC / lease.duration) * additionalDays * (1 - protocolParams.LEASE_RENEWAL_INCENTIVE / 100);
 
     lease.duration = newDuration;
     lease.costCC += additionalCost;
@@ -814,7 +856,7 @@ router.put("/lease/:leaseId/extend", authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Lease extended by ${additionalDays} days with ${LEASE_RENEWAL_INCENTIVE}% renewal discount`,
+      message: `Lease extended by ${additionalDays} days with ${protocolParams.LEASE_RENEWAL_INCENTIVE}% renewal discount`,
       lease,
       renewalDetails: {
         originalCost: lease.costCC - additionalCost,
@@ -842,54 +884,721 @@ router.get("/parameters", authMiddleware, requireRole("admin"), async (req, res)
         ccToQX: {
           name: "CC to QX Conversion Rate",
           description: "Number of Compute Credits awarded per staked QX",
-          currentValue: QX_TO_CC_RATIO,
+          currentValue: protocolParams.QX_TO_CC_RATIO,
           impact: "Affects all future stakes"
         },
         rewardRate: {
           name: "Annual Reward Rate",
           description: "Percentage rewards earned on staked amounts per year",
-          currentValue: REWARD_RATE,
+          currentValue: protocolParams.REWARD_RATE,
           unit: "%"
         },
         taskParameters: {
           minTaskCost: {
             name: "Minimum Task Cost",
-            currentValue: MIN_TASK_COST,
+            currentValue: protocolParams.MIN_TASK_COST,
             unit: "CC"
           },
           maxTaskCost: {
             name: "Maximum Task Cost",
-            currentValue: MAX_TASK_COST,
+            currentValue: protocolParams.MAX_TASK_COST,
             unit: "CC"
           },
           defaultTimeout: {
             name: "Default Task Timeout",
-            currentValue: DEFAULT_TASK_TIMEOUT,
+            currentValue: protocolParams.DEFAULT_TASK_TIMEOUT,
             unit: "seconds"
           }
         },
         leaseParameters: {
           minDuration: {
             name: "Minimum Lease Duration",
-            currentValue: MIN_LEASE_DURATION,
+            currentValue: protocolParams.MIN_LEASE_DURATION,
             unit: "days"
           },
           maxDuration: {
             name: "Maximum Lease Duration",
-            currentValue: MAX_LEASE_DURATION,
+            currentValue: protocolParams.MAX_LEASE_DURATION,
             unit: "days"
           },
           renewalIncentive: {
             name: "Lease Renewal Incentive",
-            currentValue: LEASE_RENEWAL_INCENTIVE,
+            currentValue: protocolParams.LEASE_RENEWAL_INCENTIVE,
             unit: "%",
             description: "Discount for auto-renewing leases"
+          }
+        },
+        computeMarketplaceParameters: {
+          minComputeAmount: {
+            name: "Minimum Compute Amount",
+            currentValue: protocolParams.MIN_COMPUTE_AMOUNT,
+            unit: "units"
+          },
+          maxComputeAmount: {
+            name: "Maximum Compute Amount",
+            currentValue: protocolParams.MAX_COMPUTE_AMOUNT,
+            unit: "units"
           }
         }
       }
     });
   } catch (err) {
     console.error("GET PARAMETERS ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// PUT /parameters/:paramName - Update a specific parameter (Admin only)
+router.put("/parameters/:paramName", authMiddleware, requireRole("admin"), async (req, res) => {
+  try {
+    const { newValue, reason } = req.body;
+    const paramName = req.params.paramName;
+
+    if (newValue === undefined || newValue === null) {
+      return res.status(400).json({ message: "newValue is required" });
+    }
+
+    if (typeof newValue !== "number" || newValue <= 0) {
+      return res.status(400).json({ message: "newValue must be a positive number" });
+    }
+
+    // Validate parameter exists
+    const validParams = [
+      "QX_TO_CC_RATIO",
+      "REWARD_RATE",
+      "MIN_TASK_COST",
+      "MAX_TASK_COST",
+      "DEFAULT_TASK_TIMEOUT",
+      "MIN_LEASE_DURATION",
+      "MAX_LEASE_DURATION",
+      "LEASE_RENEWAL_INCENTIVE",
+      "MIN_COMPUTE_AMOUNT",
+      "MAX_COMPUTE_AMOUNT"
+    ];
+
+    if (!validParams.includes(paramName)) {
+      return res.status(400).json({ message: `Invalid parameter name: ${paramName}` });
+    }
+
+    const oldValue = protocolParams[paramName];
+    protocolParams[paramName] = newValue;
+
+    // Add audit entry
+    addAuditEntry(req.user.email, paramName, oldValue, newValue, reason);
+
+    res.json({
+      success: true,
+      message: `Parameter ${paramName} updated successfully`,
+      change: {
+        parameter: paramName,
+        oldValue,
+        newValue,
+        reason: reason || "No reason provided",
+        admin: req.user.email,
+        timestamp: new Date()
+      }
+    });
+  } catch (err) {
+    console.error("UPDATE PARAMETER ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /parameters/audit-log - View parameter change history
+router.get("/parameters/audit-log", authMiddleware, requireRole("admin"), async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit)));
+
+    const sortedLog = [...parameterAuditLog].reverse();
+    const totalCount = sortedLog.length;
+    const start = (pageNum - 1) * limitNum;
+    const paginatedLog = sortedLog.slice(start, start + limitNum);
+
+    res.json({
+      success: true,
+      auditLog: paginatedLog,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        pages: Math.ceil(totalCount / limitNum)
+      }
+    });
+  } catch (err) {
+    console.error("GET AUDIT LOG ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// TASK MANAGEMENT ENHANCEMENTS
+// ===========================
+
+// POST /compute-task/:taskId/cancel - Cancel a queued task (Creator)
+router.post("/compute-task/:taskId/cancel", authMiddleware, requireRole("creator"), async (req, res) => {
+  try {
+    const task = await ComputeTask.findById(req.params.taskId);
+
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+
+    if (task.creatorId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to cancel this task" });
+    }
+
+    if (task.status !== "queued") {
+      return res.status(400).json({ message: "Only queued tasks can be cancelled" });
+    }
+
+    task.status = "cancelled";
+    task.result = { cancelled: true, cancelledAt: new Date(), reason: "Cancelled by creator" };
+    await task.save();
+
+    res.json({
+      success: true,
+      message: "Task cancelled successfully",
+      task
+    });
+  } catch (err) {
+    console.error("CANCEL TASK ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /compute-task/queue/status - Get detailed queue status for creator
+router.get("/compute-task/queue/status", authMiddleware, requireRole("creator"), async (req, res) => {
+  try {
+    const userTasks = await ComputeTask.find({ creatorId: req.user.id }).sort({ createdAt: 1 });
+    const queuedTasks = userTasks.filter(t => t.status === "queued");
+
+    // Get all queued tasks globally to determine position
+    const allQueuedTasks = await ComputeTask.find({ status: "queued" }).sort({ createdAt: 1 });
+    const userPositions = queuedTasks.map(task => {
+      const position = allQueuedTasks.findIndex(t => t._id.toString() === task._id.toString()) + 1;
+      return { taskId: task._id, taskName: task.taskName, position };
+    });
+
+    // Calculate average execution time for completed tasks
+    const completedTasks = userTasks.filter(t => t.status === "completed");
+    const avgExecutionTime = completedTasks.length > 0
+      ? Math.round(completedTasks.reduce((sum, t) => sum + (t.updatedAt - t.createdAt), 0) / completedTasks.length / 1000)
+      : 0;
+
+    res.json({
+      success: true,
+      queueStatus: {
+        userQueuedCount: queuedTasks.length,
+        globalQueuedCount: allQueuedTasks.length,
+        userTasks: userPositions,
+        estimatedWaitTime: userPositions.length > 0 
+          ? Math.ceil((avgExecutionTime * userPositions.length) / 60) + " minutes"
+          : "No tasks in queue"
+      }
+    });
+  } catch (err) {
+    console.error("GET QUEUE STATUS ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// LEASE MANAGEMENT ENHANCEMENTS
+// ===========================
+
+// POST /lease/:leaseId/cancel - Cancel an active lease (Investor)
+router.post("/lease/:leaseId/cancel", authMiddleware, requireRole("investor"), async (req, res) => {
+  try {
+    const lease = await Lease.findById(req.params.leaseId);
+
+    if (!lease) {
+      return res.status(404).json({ message: "Lease not found" });
+    }
+
+    if (lease.investorId.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Not authorized to cancel this lease" });
+    }
+
+    if (lease.status !== "active") {
+      return res.status(400).json({ message: "Only active leases can be cancelled" });
+    }
+
+    lease.status = "cancelled";
+    await lease.save();
+
+    res.json({
+      success: true,
+      message: "Lease cancelled successfully",
+      lease
+    });
+  } catch (err) {
+    console.error("CANCEL LEASE ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// COMPUTE MARKETPLACE
+// ===========================
+
+// GET /marketplace/compute - Browse available compute packages
+router.get("/marketplace/compute", authMiddleware, requireRole("investor"), async (req, res) => {
+  try {
+    const { minCompute, maxCompute, minCost, maxCost, minDuration, maxDuration, sortBy = "cost", page = 1, limit = 20 } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (pageNum - 1) * limitNum;
+
+    // Generate marketplace packages based on protocol parameters
+    const packages = [];
+    
+    for (let compute = protocolParams.MIN_COMPUTE_AMOUNT; compute <= protocolParams.MAX_COMPUTE_AMOUNT; compute += 50) {
+      for (let duration = protocolParams.MIN_LEASE_DURATION; duration <= protocolParams.MAX_LEASE_DURATION; duration += 10) {
+        const costPerDay = (compute / 100); // Simplified pricing
+        const totalCost = Math.round(costPerDay * duration);
+        
+        packages.push({
+          id: `pkg_${compute}_${duration}`,
+          computeAmount: compute,
+          costCC: totalCost,
+          costPerDay: costPerDay.toFixed(2),
+          duration,
+          provider: `Provider_${Math.floor(compute / 100)}`,
+          reputation: (4 + Math.random()).toFixed(1),
+          available: 100,
+          description: `${compute} compute units for ${duration} days`
+        });
+      }
+    }
+
+    // Apply filters
+    let filtered = packages;
+
+    if (minCompute) {
+      filtered = filtered.filter(p => p.computeAmount >= parseInt(minCompute));
+    }
+    if (maxCompute) {
+      filtered = filtered.filter(p => p.computeAmount <= parseInt(maxCompute));
+    }
+    if (minCost) {
+      filtered = filtered.filter(p => p.costCC >= parseInt(minCost));
+    }
+    if (maxCost) {
+      filtered = filtered.filter(p => p.costCC <= parseInt(maxCost));
+    }
+    if (minDuration) {
+      filtered = filtered.filter(p => p.duration >= parseInt(minDuration));
+    }
+    if (maxDuration) {
+      filtered = filtered.filter(p => p.duration <= parseInt(maxDuration));
+    }
+
+    // Apply sorting
+    if (sortBy === "cost") {
+      filtered.sort((a, b) => a.costCC - b.costCC);
+    } else if (sortBy === "reputation") {
+      filtered.sort((a, b) => b.reputation - a.reputation);
+    } else if (sortBy === "compute") {
+      filtered.sort((a, b) => b.computeAmount - a.computeAmount);
+    }
+
+    const totalCount = filtered.length;
+    const paginatedPackages = filtered.slice(skip, skip + limitNum);
+
+    res.json({
+      success: true,
+      packages: paginatedPackages,
+      filters: {
+        minComputeAvailable: protocolParams.MIN_COMPUTE_AMOUNT,
+        maxComputeAvailable: protocolParams.MAX_COMPUTE_AMOUNT,
+        minDurationAvailable: protocolParams.MIN_LEASE_DURATION,
+        maxDurationAvailable: protocolParams.MAX_LEASE_DURATION,
+        applied: {
+          minCompute: minCompute ? parseInt(minCompute) : null,
+          maxCompute: maxCompute ? parseInt(maxCompute) : null,
+          minCost: minCost ? parseInt(minCost) : null,
+          maxCost: maxCost ? parseInt(maxCost) : null,
+          minDuration: minDuration ? parseInt(minDuration) : null,
+          maxDuration: maxDuration ? parseInt(maxDuration) : null
+        }
+      },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount,
+        pages: Math.ceil(totalCount / limitNum)
+      }
+    });
+  } catch (err) {
+    console.error("GET MARKETPLACE ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// ANALYTICS & METRICS
+// ===========================
+
+// GET /analytics/cc-price-history - Historical CC price data
+router.get("/analytics/cc-price-history", authMiddleware, async (req, res) => {
+  try {
+    const { timeframe = "7d" } = req.query;
+    
+    // Generate historical data
+    const now = new Date();
+    const dataPoints = [];
+    const intervals = timeframe === "24h" ? 24 : timeframe === "7d" ? 7 : timeframe === "30d" ? 30 : 365;
+    const intervalMs = timeframe === "24h" ? 3600000 : timeframe === "7d" ? 86400000 : timeframe === "30d" ? 86400000 : 86400000;
+
+    for (let i = intervals - 1; i >= 0; i--) {
+      const time = new Date(now.getTime() - (i * intervalMs));
+      const basePrice = protocolParams.QX_TO_CC_RATIO;
+      const variation = (Math.random() - 0.5) * 20; // ±10% variation
+      const price = basePrice + variation;
+      
+      dataPoints.push({
+        timestamp: time,
+        price: Math.max(80, Math.min(120, price)),
+        cc: Math.round(100 / price * 100)
+      });
+    }
+
+    const currentPrice = dataPoints[dataPoints.length - 1].price;
+    const previousPrice = dataPoints[Math.max(0, dataPoints.length - 2)].price;
+    const changePercent = ((currentPrice - previousPrice) / previousPrice * 100).toFixed(2);
+
+    res.json({
+      success: true,
+      priceData: dataPoints,
+      summary: {
+        current: currentPrice.toFixed(2),
+        change24h: changePercent,
+        high: Math.max(...dataPoints.map(d => d.price)).toFixed(2),
+        low: Math.min(...dataPoints.map(d => d.price)).toFixed(2),
+        volume: Math.round(Math.random() * 100000)
+      },
+      timeframe
+    });
+  } catch (err) {
+    console.error("GET PRICE HISTORY ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /analytics/network-metrics - Global network health metrics
+router.get("/analytics/network-metrics", authMiddleware, async (req, res) => {
+  try {
+    const vault = await ComputeVault.findOne() || await ComputeVault.create({});
+    const allTasks = await ComputeTask.find();
+    const allStakes = await Stake.find();
+    const allLeases = await Lease.find();
+    const allUsers = await User.find();
+
+    const completedTasks = allTasks.filter(t => t.status === "completed").length;
+    const failedTasks = allTasks.filter(t => t.status === "failed").length;
+    const totalTasks = completedTasks + failedTasks;
+    const successRate = totalTasks > 0 ? ((completedTasks / totalTasks) * 100).toFixed(2) : 0;
+
+    const totalCCSpent = allTasks.reduce((sum, t) => sum + t.computeCreditsReceived, 0);
+    const ccBurnRate = totalCCSpent > 0 ? (totalCCSpent / allTasks.length).toFixed(2) : 0;
+
+    const creators = allUsers.filter(u => u.role === "creator").length;
+    const investors = allUsers.filter(u => u.role === "investor").length;
+    const admins = allUsers.filter(u => u.role === "admin").length;
+
+    res.json({
+      success: true,
+      networkMetrics: {
+        taskMetrics: {
+          total: allTasks.length,
+          completed: completedTasks,
+          failed: failedTasks,
+          queued: allTasks.filter(t => t.status === "queued").length,
+          running: allTasks.filter(t => t.status === "running").length,
+          successRate: parseFloat(successRate)
+        },
+        economyMetrics: {
+          totalQXLocked: vault.totalLockedQX,
+          totalCCInCirculation: vault.totalComputeCredits,
+          ccBurnRate: parseFloat(ccBurnRate),
+          rewardPool: vault.rewardPool,
+          avgStakeSize: allStakes.length > 0 ? (vault.totalLockedQX / allStakes.length).toFixed(2) : 0
+        },
+        participationMetrics: {
+          totalUsers: allUsers.length,
+          activeCreators: creators,
+          activeInvestors: investors,
+          activeAdmins: admins,
+          totalStakers: allStakes.length,
+          activeLeasers: allLeases.filter(l => l.status === "active").length
+        },
+        marketMetrics: {
+          activeLeases: allLeases.filter(l => l.status === "active").length,
+          totalComputeAvailable: allLeases.reduce((sum, l) => sum + l.computeAmount, 0),
+          ccPerQX: protocolParams.QX_TO_CC_RATIO
+        }
+      }
+    });
+  } catch (err) {
+    console.error("GET NETWORK METRICS ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /analytics/creator-performance - Creator performance metrics
+router.get("/analytics/creator-performance", authMiddleware, requireRole("creator"), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const tasks = await ComputeTask.find({ creatorId: userId });
+
+    const completed = tasks.filter(t => t.status === "completed").length;
+    const failed = tasks.filter(t => t.status === "failed").length;
+    const queued = tasks.filter(t => t.status === "queued").length;
+    const running = tasks.filter(t => t.status === "running").length;
+
+    const successRate = tasks.length > 0 ? ((completed / tasks.length) * 100).toFixed(2) : 0;
+    const totalCCSpent = tasks.reduce((sum, t) => sum + t.computeCostCC, 0);
+    const avgCCPerTask = tasks.length > 0 ? (totalCCSpent / tasks.length).toFixed(2) : 0;
+
+    const completedTasks = tasks.filter(t => t.status === "completed");
+    const avgExecutionTime = completedTasks.length > 0
+      ? Math.round(completedTasks.reduce((sum, t) => sum + (t.updatedAt - t.createdAt), 0) / completedTasks.length / 1000)
+      : 0;
+
+    // Get user stakes
+    const stakes = await Stake.find({ userId });
+    const totalCC = stakes.reduce((sum, s) => sum + s.computeCreditsReceived, 0);
+    const usedCC = tasks.filter(t => t.status === "completed" || t.status === "running").reduce((sum, t) => sum + t.computeCostCC, 0);
+
+    res.json({
+      success: true,
+      performance: {
+        taskStats: {
+          total: tasks.length,
+          completed,
+          failed,
+          queued,
+          running
+        },
+        qualityMetrics: {
+          successRate: parseFloat(successRate),
+          avgExecutionTime,
+          avgCCPerTask: parseFloat(avgCCPerTask),
+          totalCCSpent
+        },
+        resourceMetrics: {
+          totalCC,
+          usedCC,
+          available: totalCC - usedCC,
+          utilizationPercent: totalCC > 0 ? ((usedCC / totalCC) * 100).toFixed(2) : 0
+        }
+      }
+    });
+  } catch (err) {
+    console.error("GET CREATOR PERFORMANCE ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /analytics/investor-roi - Investor ROI calculation
+router.get("/analytics/investor-roi", authMiddleware, requireRole("investor"), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const leases = await Lease.find({ investorId: userId });
+
+    const activeLeases = leases.filter(l => l.status === "active");
+    const expiredLeases = leases.filter(l => l.status === "expired");
+    const totalCostCC = leases.reduce((sum, l) => sum + l.costCC, 0);
+    const totalComputeLeased = leases.reduce((sum, l) => sum + l.computeAmount, 0);
+
+    // Simplified ROI calculation: assume 5% monthly return on leased compute
+    const roiPercent = (5 * activeLeases.length).toFixed(2);
+    const projectedMonthlyReturn = (totalCostCC * 0.05).toFixed(2);
+
+    const avgLeaseDuration = leases.length > 0 
+      ? (leases.reduce((sum, l) => sum + l.duration, 0) / leases.length).toFixed(0)
+      : 0;
+
+    res.json({
+      success: true,
+      roi: {
+        portfolio: {
+          totalInvestedCC: totalCostCC,
+          activeLeases: activeLeases.length,
+          completedLeases: expiredLeases.length,
+          totalComputeLeased
+        },
+        returns: {
+          roiPercent: parseFloat(roiPercent),
+          projectedMonthlyReturn: parseFloat(projectedMonthlyReturn),
+          avgLeaseDuration: parseInt(avgLeaseDuration)
+        },
+        leaseBreakdown: {
+          active: activeLeases.length,
+          expired: expiredLeases.length,
+          cancelled: leases.filter(l => l.status === "cancelled").length
+        }
+      }
+    });
+  } catch (err) {
+    console.error("GET INVESTOR ROI ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// USER MANAGEMENT ENHANCEMENTS
+// ===========================
+
+// PUT /users/:userId/ban - Ban a user (Admin only)
+router.put("/users/:userId/ban", authMiddleware, requireRole("admin"), async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.role === "admin") {
+      return res.status(403).json({ message: "Cannot ban admin users" });
+    }
+
+    user.status = "banned";
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `User ${user.email} has been banned`,
+      user
+    });
+  } catch (err) {
+    console.error("BAN USER ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// PUT /users/:userId/unban - Unban a user (Admin only)
+router.put("/users/:userId/unban", authMiddleware, requireRole("admin"), async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    user.status = "active";
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `User ${user.email} has been unbanned`,
+      user
+    });
+  } catch (err) {
+    console.error("UNBAN USER ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ===========================
+// TASK PROCESSOR MONITORING (NEW)
+// ===========================
+
+// GET /processor/status - Check automatic task processor status
+router.get("/processor/status", authMiddleware, async (req, res) => {
+  try {
+    const stats = await getProcessorStats();
+    
+    if (!stats) {
+      return res.status(500).json({
+        success: false,
+        message: "Could not retrieve processor stats"
+      });
+    }
+    
+    res.json({
+      success: true,
+      processorStatus: stats
+    });
+  } catch (err) {
+    console.error("GET PROCESSOR STATUS ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /processor/detailed-queue - See all queued tasks with details
+router.get("/processor/detailed-queue", authMiddleware, async (req, res) => {
+  try {
+    const queuedTasks = await ComputeTask.find({ status: "queued" })
+      .populate("creatorId", "email role")
+      .sort({ createdAt: 1 });
+    
+    const taskDetails = queuedTasks.map((task, index) => ({
+      position: index + 1,
+      taskId: task._id,
+      taskName: task.taskName,
+      creatorEmail: task.creatorId.email,
+      costCC: task.computeCostCC,
+      estimatedDuration: task.estimatedDuration,
+      priority: task.priority,
+      createdAt: task.createdAt,
+      queueTime: Math.floor((new Date() - task.createdAt) / 1000)
+    }));
+    
+    res.json({
+      success: true,
+      queuedTasks: taskDetails,
+      totalQueued: queuedTasks.length,
+      estimatedProcessingTime: Math.ceil(
+        queuedTasks.reduce((sum, t) => sum + (t.estimatedDuration || 5), 0) / 1000
+      ) + " seconds"
+    });
+  } catch (err) {
+    console.error("GET DETAILED QUEUE ERROR:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// GET /processor/execution-history/:taskId - See full execution history
+router.get("/processor/execution-history/:taskId", authMiddleware, async (req, res) => {
+  try {
+    const task = await ComputeTask.findById(req.params.taskId);
+    
+    if (!task) {
+      return res.status(404).json({ message: "Task not found" });
+    }
+    
+    // Authorization: Creator or Admin
+    if (task.creatorId.toString() !== req.user.id && req.user.role !== "admin") {
+      return res.status(403).json({ message: "Not authorized" });
+    }
+    
+    res.json({
+      success: true,
+      task: {
+        taskId: task._id,
+        taskName: task.taskName,
+        status: task.status,
+        costCC: task.computeCostCC,
+        createdAt: task.createdAt,
+        startedAt: task.startedAt,
+        finishedAt: task.finishedAt,
+        actualDuration: task.actualDuration,
+        executionAttempts: task.executionAttempts,
+        errorMessage: task.errorMessage
+      },
+      executionLog: task.executionLog.map(entry => ({
+        timestamp: entry.timestamp,
+        event: entry.event,
+        details: entry.details
+      })),
+      result: task.result
+    });
+  } catch (err) {
+    console.error("GET EXECUTION HISTORY ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });

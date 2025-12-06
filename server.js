@@ -6,6 +6,7 @@ import cors from "cors";
 import mongoose from "mongoose";
 import authRoutes from "./routes/auth.js";
 import protocolRoutes from "./routes/protocol.js";
+import { startComputeTaskProcessor, stopComputeTaskProcessor } from "./services/taskProcessor.js";
 
 const app = express();
 
@@ -35,13 +36,33 @@ mongoose
   .connect(process.env.MONGO_URI, {
     dbName: process.env.DATABASE_NAME,
   })
-  .then(() => {
+  .then(async () => {
     console.log("✓ MongoDB connected");
     
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, async () => {
       console.log(`✓ Server running on port ${PORT}`);
       console.log(`✓ CORS enabled for: ${process.env.FRONTEND_URL || "http://localhost:5173"}`);
+      
+      // 🔹 START AUTOMATIC TASK PROCESSOR
+      console.log("\n🚀 Starting automatic compute task processor...");
+      await startComputeTaskProcessor();
+      console.log("✓ Compute task processor is now running\n");
     });
+    
+    // 🔹 GRACEFUL SHUTDOWN
+    const shutdown = async () => {
+      console.log("\n🛑 Shutting down server...");
+      stopComputeTaskProcessor();
+      server.close(() => {
+        console.log("✓ Server closed");
+        mongoose.connection.close();
+        console.log("✓ MongoDB connection closed");
+        process.exit(0);
+      });
+    };
+    
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
   })
   .catch((err) => {
     console.error("✗ MongoDB connection failed:", err.message);

@@ -1,11 +1,12 @@
 /**
- * ⚙️ AUTOMATIC COMPUTE TASK PROCESSOR
+ * ⚙️ AUTOMATIC COMPUTE TASK PROCESSOR - PARALLEL EXECUTION
  * 
  * This service automatically executes queued compute tasks without any admin interaction.
  * 
  * Features:
- * ✅ Picks one task at a time from the queue
- * ✅ Runs tasks sequentially (no parallel execution)
+ * ✅ Picks ALL queued tasks at once
+ * ✅ Runs tasks in parallel (concurrent execution)
+ * ✅ Each task executes independently in its own async context
  * ✅ Simulates task execution with realistic timing
  * ✅ Auto-completes with 90% success rate / 10% failure rate
  * ✅ Tracks execution time and updates vault stats
@@ -35,7 +36,6 @@ const SUCCESS_RATE = 90;
 // ===========================
 
 let processorInterval = null;
-let isProcessing = false;
 
 // ===========================
 // HELPER FUNCTIONS
@@ -99,18 +99,18 @@ async function recoverStrandedTasks() {
 }
 
 /**
- * STEP 1: Find the next queued task (oldest first)
+ * STEP 1: Find all queued tasks
  */
-async function pickNextTask() {
+async function pickAllQueuedTasks() {
   try {
-    const task = await ComputeTask.findOne({ status: "queued" })
+    const tasks = await ComputeTask.find({ status: "queued" })
       .sort({ createdAt: 1 })
       .exec();
     
-    return task;
+    return tasks;
   } catch (err) {
-    console.error("❌ Error picking next task:", err.message);
-    return null;
+    console.error("❌ Error picking queued tasks:", err.message);
+    return [];
   }
 }
 
@@ -266,54 +266,57 @@ async function failTask(task, executionData) {
 }
 
 /**
- * MAIN PROCESSOR FUNCTION: Execute one task per cycle
+ * MAIN PROCESSOR FUNCTION: Execute all queued tasks in parallel
  */
-async function processOneTask() {
-  // Prevent overlapping execution
-  if (isProcessing) {
-    return;
-  }
-  
-  isProcessing = true;
-  
+async function processAllQueuedTasks() {
   try {
-    // Step A: Pick the next queued task
-    const task = await pickNextTask();
+    // Step A: Pick all queued tasks
+    const queuedTasks = await pickAllQueuedTasks();
     
-    if (!task) {
+    if (queuedTasks.length === 0) {
       // Queue is empty
-      isProcessing = false;
       return;
     }
     
-    // Step B: Start execution
-    let runningTask = await startTaskExecution(task);
-    if (!runningTask) {
-      isProcessing = false;
-      return;
-    }
+    console.log(`\n🚀 Processing ${queuedTasks.length} task(s) in parallel...\n`);
     
-    // Step C: Simulate execution
-    const executionData = await simulateTaskExecution(runningTask);
-    if (!executionData) {
-      isProcessing = false;
-      return;
-    }
+    // Step B: Execute all tasks in parallel using Promise.all
+    const executionPromises = queuedTasks.map(async (task) => {
+      try {
+        // Start execution
+        let runningTask = await startTaskExecution(task);
+        if (!runningTask) {
+          return;
+        }
+        
+        // Simulate execution
+        const executionData = await simulateTaskExecution(runningTask);
+        if (!executionData) {
+          return;
+        }
+        
+        // Mark as completed or failed
+        if (executionData.success) {
+          await completeTask(runningTask, executionData);
+        } else {
+          await failTask(runningTask, executionData);
+        }
+        
+        console.log(`   📝 Execution log saved with ${runningTask.executionLog.length} entries\n`);
+        
+      } catch (err) {
+        console.error("❌ ERROR processing task:", err.message);
+      }
+    });
     
-    // Step D: Mark as completed or failed
-    if (executionData.success) {
-      await completeTask(runningTask, executionData);
-    } else {
-      await failTask(runningTask, executionData);
-    }
+    // Wait for ALL tasks to complete in parallel
+    await Promise.all(executionPromises);
     
-    console.log(`   📝 Execution log saved with ${runningTask.executionLog.length} entries\n`);
+    console.log(`✅ Completed processing ${queuedTasks.length} task(s)\n`);
     
   } catch (err) {
     console.error("❌ CRITICAL ERROR in task processor:", err.message);
     console.error("Stack:", err.stack);
-  } finally {
-    isProcessing = false;
   }
 }
 
@@ -334,7 +337,7 @@ export async function startComputeTaskProcessor() {
     console.log(`⏰ Task processor will check for queued tasks every ${PROCESSOR_INTERVAL / 1000}s\n`);
     
     processorInterval = setInterval(async () => {
-      await processOneTask();
+      await processAllQueuedTasks();
     }, PROCESSOR_INTERVAL);
     
     console.log("✅ Automatic task processor started successfully!");

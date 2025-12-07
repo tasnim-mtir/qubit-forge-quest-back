@@ -7,6 +7,18 @@ Built for the **Nostromo Launchpad Track** of the *Qubic | Hack the Future Hacka
 
 ---
 
+## 🔗 **Project Links**
+
+### 🌐 **Live Demo**
+
+👉 [https://qubit-forge-quest-front.vercel.app/](https://qubit-forge-quest-front-dq1gtnr7q-tasnims-projects-1660121b.vercel.app/)
+
+### 📦 **Frontend Repository**
+
+👉 [https://github.com/tasnim-mtir/qubit-forge-quest-front](https://github.com/tasnim-mtir/qubit-forge-quest-front)
+
+---
+
 ## ⭐ **Table of Contents**
 
 1. [Overview](#overview)

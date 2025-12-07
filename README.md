@@ -11,7 +11,7 @@ Built for the **Nostromo Launchpad Track** of the *Qubic | Hack the Future Hacka
 
 ### 🌐 **Live Demo**
 
-👉 [https://qubit-forge-quest-front.vercel.app/](https://qubit-forge-quest-front-dq1gtnr7q-tasnims-projects-1660121b.vercel.app/)
+👉 [https://qubit-forge-quest-front.vercel.app/](https://qubit-forge-quest-front.vercel.app/)
 
 ### 📦 **Frontend Repository**
 

@@ -77,7 +77,27 @@ router.get("/dashboard/creator-overview", authMiddleware, requireRole("creator")
     const failedTasks = allTasks.filter(t => t.status === "failed").length;
 
     // Calculate metrics
-    const totalCCSpent = allTasks.reduce((sum, task) => sum + task.computeCostCC, 0);
+// Calculate TRUE CC utilization (based on total CC spent by tasks)
+const allCompletedTasks = await ComputeTask.find({ status: "completed" });
+
+
+// Total CC consumed by completed tasks
+const totalCCSpent = allCompletedTasks.reduce(
+  (sum, task) => sum + (task.computeCostCC || 0),
+  0
+);
+
+// Correct CC Utilization formula
+const ccUtilization =
+  vault.totalComputeCredits > 0
+    ? Math.round((totalCCSpent / vault.totalComputeCredits) * 10000) / 100 // 2 decimals
+    : 0;
+
+
+// Pool health based on utilization
+let poolHealth = "Healthy";
+if (ccUtilization > 80) poolHealth = "Critical";
+else if (ccUtilization > 50) poolHealth = "Warning";
     const successRate = allTasks.length > 0 ? ((completedTasks / allTasks.length) * 100).toFixed(2) : 0;
     const avgExecutionTime = completedTasks > 0 
       ? Math.round(allTasks.filter(t => t.status === "completed").reduce((sum, t) => sum + (t.updatedAt - t.createdAt), 0) / completedTasks / 1000)
@@ -387,32 +407,53 @@ router.put("/stake/:stakeId/adjust-lock-period", authMiddleware, requireRole("ad
 });
 
 // GET /vault/stats - Get vault statistics with detailed metrics
+// GET /vault/stats - Get vault statistics with detailed metrics
 router.get("/vault/stats", authMiddleware, async (req, res) => {
   try {
+    // Load vault (or create)
     let vault = await ComputeVault.findOne();
     if (!vault) {
       vault = await ComputeVault.create({});
     }
 
+    // Global stats
     const totalStakers = await Stake.distinct("userId");
     const activeStakes = await Stake.countDocuments({ status: "active" });
     const totalTasksQueued = await ComputeTask.countDocuments({ status: "queued" });
     const totalTasksCompleted = await ComputeTask.countDocuments({ status: "completed" });
     const totalTasksFailed = await ComputeTask.countDocuments({ status: "failed" });
 
-    const successRate = (vault.totalTasksExecuted > 0) 
-      ? ((totalTasksCompleted / vault.totalTasksExecuted) * 100).toFixed(2)
-      : 0;
+    // Success rate
+    const successRate =
+      vault.totalTasksExecuted > 0
+        ? ((totalTasksCompleted / vault.totalTasksExecuted) * 100).toFixed(2)
+        : 0;
 
-    // Calculate utilization
-    const ccUtilization = vault.totalComputeCredits > 0 
-      ? Math.round(((vault.totalTasksExecuted * 100) / vault.totalComputeCredits) * 100) / 100
-      : 0;
+    // ============================
+    //  CORRECT CC UTILIZATION
+    // ============================
 
+    // 1. Get all completed tasks
+    const completedTasks = await ComputeTask.find({ status: "completed" });
+
+    // 2. Total CC consumed by real task execution
+    const totalCCSpent = completedTasks.reduce(
+      (sum, task) => sum + (task.computeCostCC || 0),
+      0
+    );
+
+    // 3. Proper utilization formula
+    const ccUtilization =
+      vault.totalComputeCredits > 0
+        ? Math.round((totalCCSpent / vault.totalComputeCredits) * 10000) / 100 // → 2 decimal %
+        : 0;
+
+    // 4. Pool health status
     let poolHealth = "Healthy";
     if (ccUtilization > 80) poolHealth = "Critical";
     else if (ccUtilization > 50) poolHealth = "Warning";
 
+    // Send response
     res.json({
       success: true,
       vault: {
@@ -428,16 +469,19 @@ router.get("/vault/stats", authMiddleware, async (req, res) => {
         totalTasksCompleted,
         totalTasksFailed,
         successRate: parseFloat(successRate),
-        ccPerQX: QX_TO_CC_RATIO,
-        ccUtilization,
+        ccPerQX: protocolParams.QX_TO_CC_RATIO,
+        totalCCSpent,
+        ccUtilization, // <-- FIXED
         poolHealth
       }
     });
+
   } catch (err) {
     console.error("GET VAULT STATS ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // ===========================
 // B. COMPUTE TASK EXECUTION (Enhanced)
@@ -639,6 +683,13 @@ router.put("/compute-task/:taskId/simulate-complete", authMiddleware, requireRol
     let vault = await ComputeVault.findOne();
     if (!vault) vault = await ComputeVault.create({});
     vault.totalTasksExecuted += 1;
+
+// Add reward to pool
+const reward = task.computeCostCC * (protocolParams.REWARD_RATE / 100);
+vault.rewardPool += reward;
+
+await vault.save();
+
     await vault.save();
 
     res.json({

@@ -114,6 +114,7 @@ async function pickAllQueuedTasks() {
   }
 }
 
+
 /**
  * STEP 2: Start executing a task
  */
@@ -181,7 +182,6 @@ async function simulateTaskExecution(task) {
     return null;
   }
 }
-
 /**
  * STEP 4A: Mark task as completed
  */
@@ -196,31 +196,44 @@ async function completeTask(task, executionData) {
       completedAt: executionData.completedAt,
       computeCostCC: task.computeCostCC
     };
-    
+
     await addExecutionLog(task, "COMPLETED", {
       duration: executionData.executionTime,
       result: task.result
     });
-    
+
     await task.save();
-    
-    // Update vault statistics
+
+    // ------------------------------
+    // ⭐ UPDATE COMPUTE VAULT
+    // ------------------------------
     let vault = await ComputeVault.findOne();
     if (!vault) {
       vault = await ComputeVault.create({});
     }
+
+    // Increase executed count
     vault.totalTasksExecuted = (vault.totalTasksExecuted || 0) + 1;
+
+    // ⭐ ADD REWARD TO POOL
+    const REWARD_RATE = 5; // or use your protocolParams
+    const reward = task.computeCostCC * (REWARD_RATE / 100);
+
+    vault.rewardPool = (vault.rewardPool || 0) + reward;
+
     await vault.save();
-    
-    console.log(`   ✅ COMPLETED in ${executionData.executionTime}s`);
+
+    console.log(`   💰 Reward added to pool: +${reward} CC`);
+    console.log(`   🏦 New Reward Pool Balance: ${vault.rewardPool} CC`);
     console.log(`   📊 Vault updated: totalTasksExecuted = ${vault.totalTasksExecuted}`);
-    
+
     return task;
   } catch (err) {
     console.error("❌ Error completing task:", err.message);
     return null;
   }
 }
+
 
 /**
  * STEP 4B: Mark task as failed

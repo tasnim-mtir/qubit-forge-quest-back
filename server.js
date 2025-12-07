@@ -6,6 +6,7 @@ import cors from "cors";
 import mongoose from "mongoose";
 import authRoutes from "./routes/auth.js";
 import protocolRoutes from "./routes/protocol.js";
+import roleRequestRoutes from "./routes/roleRequest.js";
 import { startComputeTaskProcessor, stopComputeTaskProcessor } from "./services/taskProcessor.js";
 
 const app = express();
@@ -25,6 +26,7 @@ const PORT = process.env.PORT || 3000;
 // 🔹 Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/protocol", protocolRoutes);
+app.use("/api", roleRequestRoutes);
 
 // 🔹 Health check endpoint
 app.get("/api/health", (req, res) => {

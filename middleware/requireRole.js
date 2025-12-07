@@ -6,11 +6,13 @@ export const requireRole = (requiredRole) => {
 
     const userRole = req.user.role;
 
-    const roleHierarchy = {
-      user: 1,
-      creator: 2,
-      admin: 3
-    };
+   const roleHierarchy = {
+  user: 1,
+  creator: 2,
+  investor: 2,
+  admin: 3
+};
+
 
     if (!roleHierarchy[userRole]) {
       return res.status(403).json({ message: "Forbidden: Invalid role" });
